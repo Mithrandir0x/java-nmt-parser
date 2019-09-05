@@ -10,7 +10,7 @@ A small parser I wrote for extracting data from a Java Native Memory Tracking su
 Generate a Java NMT report:
 
 ```bash
-jcmd $JAVA_PID VM.native_memory scale=KB
+jcmd $JAVA_PID VM.native_memory scale=KB > nmt.sample.log
 ```
 
 Ensure you have proper dependencies:
