@@ -1,0 +1,125 @@
+#!/usr/bin/env python
+
+from argparse import ArgumentParser
+from slugify import slugify
+import json
+import re
+
+NMT_START_RE = re.compile("^[0-9]+\:")
+
+NMT_TOTAL_RE = re.compile("^Total: reserved=(.*), committed=(.*)")
+
+NMT_SECTION_RE = re.compile("^\-\s+([A-Za-z0-9 -]+) \(reserved=(.*), committed=(.*)\)")
+NMT_SECTION_MMAP_RE = re.compile("\(mmap: reserved=(.*), committed=(.*)\)")
+NMT_CLASSES_RE = re.compile("\(classes \#([0-9]+)\)")
+NMT_CLASS_INSTANCES_RE = re.compile("\( *instance classes \#([0-9]+), array classes \#([0-9]+)\)")
+NMT_MALLOC_RE = re.compile("\(malloc=(.*) \#([0-9]+)\)")
+NMT_THREADS_RE = re.compile("\(thread \#([0-9]+)\)")
+NMT_STATS_SECTION_START_RE = re.compile("\(  ([a-zA-Z ]+)\: *\)")
+NMT_STATS_SECTION_MEMORY_RE = re.compile("\(    reserved=(.*), committed=(.*)\)")
+NMT_STATS_SECTION_ATTR_RE = re.compile("\(    ([a-zA-Z ]+)=([0-9]+[A-Z]+)\)")
+NMT_STATS_SECTION_ATTR_PERCENTAGE_RE = re.compile("\(    ([a-zA-Z ]+)=([0-9]+[A-Z]+) .([0-9\.\%]+)\)")
+NMT_ARENA_RE = re.compile("\(arena=(.*) \#([0-9]+)\)")
+NMT_STACK_RE = re.compile("\(stack: reserved=(.*), committed=(.*)\)")
+
+data = {}
+
+section = ""
+inner_section = ""
+
+parser = ArgumentParser(description='Parse and generate a Json from Java Native Memory Tracking.')
+parser.add_argument('report', metavar='index-name', nargs=1, help='NMT report')
+
+args = parser.parse_args()
+
+def memory(key, value):
+    num = int(value[:-2])
+    data[key] = value
+    data["%s.kb" % key] = num
+    data["%s.mb" % key] = num / 1024
+    data["%s.gb" % key] = num / 1024 / 1024
+
+with open(args.report[0]) as file:
+    for line in [ l.strip() for l in file.readlines() ]:
+        if NMT_START_RE.match(line) or "Native Memory Tracking:" in line or len(line) == 0:
+            section = ""
+            pass
+
+        total_memory_match = NMT_TOTAL_RE.match(line)
+        if total_memory_match:
+            memory('total.reserved', total_memory_match.group(1))
+            memory('total.committed', total_memory_match.group(2))
+            pass
+        
+        section_start_match = NMT_SECTION_RE.match(line)
+        if section_start_match:
+            section = slugify(section_start_match.group(1))
+            memory('%s.reserved' % section, section_start_match.group(2))
+            memory('%s.committed' % section, section_start_match.group(3))
+            pass
+
+        mmap_match = NMT_SECTION_MMAP_RE.match(line)
+        if mmap_match:
+            memory('%s.mmap.reserved' % section, mmap_match.group(1))
+            memory('%s.mmap.committed' % section, mmap_match.group(2))
+            pass
+
+        classes_match = NMT_CLASSES_RE.match(line)
+        if classes_match:
+            data['%s.classes.total' % section] = int(classes_match.group(1))
+            pass
+
+        class_instances_match = NMT_CLASS_INSTANCES_RE.match(line)
+        if class_instances_match:
+            data['%s.classes.instances' % section] = int(class_instances_match.group(1))
+            data['%s.classes.arrays' % section] = int(class_instances_match.group(2))
+            pass
+
+        malloc_match = NMT_MALLOC_RE.match(line)
+        if malloc_match:
+            memory('%s.malloc.allocated' % section, malloc_match.group(1))
+            data['%s.malloc.allocations' % section] = int(malloc_match.group(2))
+            pass
+
+        inner_section_start_match = NMT_STATS_SECTION_START_RE.match(line)
+        if inner_section_start_match:
+            inner_section = slugify(inner_section_start_match.group(1))
+            pass
+        
+        inner_section_mem_match = NMT_STATS_SECTION_MEMORY_RE.match(line)
+        if inner_section_mem_match:
+            memory('%s.%s.reserved' % (section, inner_section), inner_section_mem_match.group(1))
+            memory('%s.%s.committed' % (section, inner_section), inner_section_mem_match.group(2))
+            pass
+
+        inner_section_attr_match = NMT_STATS_SECTION_ATTR_RE.match(line)
+        if inner_section_attr_match:
+            attr = slugify(inner_section_attr_match.group(1))
+            memory('%s.%s.%s' % (section, inner_section, attr), inner_section_attr_match.group(2))
+            pass
+
+        inner_section_attr_per_match = NMT_STATS_SECTION_ATTR_PERCENTAGE_RE.match(line)
+        if inner_section_attr_per_match:
+            attr = slugify(inner_section_attr_per_match.group(1))
+            memory('%s.%s.%s' % (section, inner_section, attr), inner_section_attr_per_match.group(2))
+            data['%s.%s.%s.percentage' % (section, inner_section, attr)] = inner_section_attr_per_match.group(3)
+            pass
+
+        arena_match = NMT_ARENA_RE.match(line)
+        if arena_match:
+            memory('%s.arena.allocated' % section, arena_match.group(1))
+            data['%s.arena.allocations' % section] = int(arena_match.group(2))
+            pass
+
+        threads_match = NMT_THREADS_RE.match(line)
+        if threads_match:
+            data['%s.threads.total' % section] = int(threads_match.group(1))
+            pass
+
+        stack_match = NMT_STACK_RE.match(line)
+        if stack_match:
+            memory('%s.stack.reserved' % section, stack_match.group(1))
+            memory('%s.stack.committed' % section, stack_match.group(2))
+            pass
+
+    print json.dumps(data)
