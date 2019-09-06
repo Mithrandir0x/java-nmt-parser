@@ -122,4 +122,4 @@ with open(args.report[0]) as file:
             memory('%s.stack.committed' % section, stack_match.group(2))
             pass
 
-    print json.dumps(data)
+    print json.dumps(data, sort_keys = True)
